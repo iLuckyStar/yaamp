@@ -11,6 +11,28 @@ const checkForUpdatesAndNotify = require('./src/node/updates.js')
 const interceptStreamProtocol = require('./src/node/protocol.js')
 
 const electron = require('electron')
+// После const electron = require('electron')
+const axios = require('axios');
+
+// Функция проверки рекламы: точно 64 символа
+function isAdUrl(url) {
+  if (!url) return false;
+  
+  const parts = url.split('/');
+  const lastPart = parts[parts.length - 1];
+  
+  // Точная проверка: реклама = 64 символа
+  const isAd = lastPart.length === 64;
+  
+  if (isAd) {
+    console.warn(`[AD_CHECK] РЕКЛАМА: ${lastPart.length} символов`);
+    console.warn(`[AD_CHECK] URL: ${url}`);
+  } else {
+    console.log(`[AD_CHECK] НОРМА: ${lastPart.length} символов | ID: ${lastPart}`);
+  }
+  
+  return isAd;
+}
 const fs = require('fs')
 const {readFile} = require('fs/promises');
 
