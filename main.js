@@ -13,26 +13,6 @@ const interceptStreamProtocol = require('./src/node/protocol.js')
 const electron = require('electron')
 // После const electron = require('electron')
 const axios = require('axios');
-
-// Функция проверки рекламы: точно 64 символа
-function isAdUrl(url) {
-  if (!url) return false;
-  
-  const parts = url.split('/');
-  const lastPart = parts[parts.length - 1];
-  
-  // Точная проверка: реклама = 64 символа
-  const isAd = lastPart.length === 64;
-  
-  if (isAd) {
-    console.warn(`[AD_CHECK] РЕКЛАМА: ${lastPart.length} символов`);
-    console.warn(`[AD_CHECK] URL: ${url}`);
-  } else {
-    console.log(`[AD_CHECK] НОРМА: ${lastPart.length} символов | ID: ${lastPart}`);
-  }
-  
-  return isAd;
-}
 const fs = require('fs')
 const {readFile} = require('fs/promises');
 
@@ -408,34 +388,73 @@ getTokenFromFile().then( () => {
     return tracks;
   })
 
-  // Получаем URL трека по ID
+  // === ДОБАВЛЕНО: функция проверки рекламы по длине URL ===
+  function isAdUrl(url) {
+    if (!url) return false;
+    
+    const parts = url.split('/');
+    const lastPart = parts[parts.length - 1];
+    
+    // Реклама = 64 символа, нормальный трек = короткий ID
+    const isAd = lastPart.length === 64;
+    
+    if (isAd) {
+      console.warn(`[AD_CHECK] РЕКЛАМА: ${lastPart.length} символов`);
+      console.warn(`[AD_CHECK] URL: ${url}`);
+    } else {
+      console.log(`[AD_CHECK] НОРМА: ${lastPart.length} символов | ID: ${lastPart}`);
+    }
+    
+    return isAd;
+  }
+
+  // Получаем URL трека по ID (с фильтрацией 64-символьной рекламы)
   ipcMain.handle('getTrackByID', async (event, trackid) => {
+    if (trackid.includes('blob')) {
+      return trackid; // Blob URL - возвращаем как есть
+    }
 
-    if (!trackid.includes('blob')) {
-      nowPlaying = trackid;
+    nowPlaying = trackid;
+    let attemptCount = 0;
+    
+    console.log(`\n=== Загрузка трека: ${trackid} ===`);
+    
+    // Бесконечный цикл до получения нормального трека
+    while (true) {
+      attemptCount++;
+      
+      try {
+        // Получаем URL трека от Яндекс.Музыки
+        const trackInfo = await getTrackUrl(client, trackid);
+        
+        // ПРОВЕРКА: если длина последней части URL = 64 символа - это реклама
+        if (isAdUrl(trackInfo.url)) {
+          console.warn(`[getTrackByID] ✗ НАЙДЕНА 64-символьная реклама, повтор через 500мс...`);
+          await new Promise(resolve => setTimeout(resolve, 500));
+          continue; // Пропускаем и запрашиваем снова
+        }
+        
+        // Нормальный трек
+        console.log(`[getTrackByID] ✓ Нормальный трек после ${attemptCount} попыток`);
+        
+        // Отправляем статистику в Яндекс.Музыку
+        await client.tracks.playAudio({
+          "track-id": trackid,
+          "from": 'web-main-rup-radio-main',
+          "timestamp": new Date().toISOString(),
+          'uid': accountData.uid,
+          'play-id': sessionId
+        });
 
-      const data = await getTrackUrl(client, trackid).then((data) => {
-          return data;
-      })
-  
-      await client.tracks.playAudio({"track-id": trackid, "from": 'web-main-rup-radio-main', "timestamp": new Date().toISOString(), 'uid': accountData.uid, 'play-id': sessionId}).then((data) => {
-        return data;
-      })
-  
-        // Discord Integration
-  
-        // Check on uploaded track
+        // Discord Rich Presence (без изменений)
         if (!/^.*-.*-.*-.*-.*$/.test(trackid)) {
           await client.tracks.getTracks({"track-ids": [trackid]}).then((data) => {
             const element = data.result[0];
-            const startTimestamp = new Date();
-  
             let artist = [];
-  
             element.artists.forEach((a) => {
               artist.push(a.name);
             });
-  
+
             const presObj = {
               details: `${element.title}`,
               state: `${artist.join(', ')}`,
@@ -450,19 +469,18 @@ getTokenFromFile().then( () => {
                 },
               ],
             };
-          
+
             rpc.setActivity(presObj);
-  
-            return data;
-          })
+          });
         }
+
+        return trackInfo.url;
         
-      return data;
-    } else {
-
-      return trackid;
+      } catch (error) {
+        console.error(`[getTrackByID] Ошибка (попытка ${attemptCount}): ${error.message}`);
+        await new Promise(resolve => setTimeout(resolve, 1000));
+      }
     }
-
   })
 
   // Получаем список плейлистов пользователя
